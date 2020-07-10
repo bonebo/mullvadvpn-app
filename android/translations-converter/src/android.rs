@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
+use std::{
+    fmt::{self, Display, Formatter},
+    ops::{Deref, DerefMut},
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StringResources {
@@ -42,5 +45,27 @@ impl IntoIterator for StringResources {
 
     fn into_iter(self) -> Self::IntoIter {
         self.entries.into_iter()
+    }
+}
+
+impl Display for StringResources {
+    fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
+        writeln!(formatter, "<resources>")?;
+
+        for string in &self.entries {
+            writeln!(formatter, "    {}", string)?;
+        }
+
+        writeln!(formatter, "</resources>")
+    }
+}
+
+impl Display for StringResource {
+    fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
+        write!(
+            formatter,
+            r#"<string name="{}">{}</string>"#,
+            self.name, self.value
+        )
     }
 }
