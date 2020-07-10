@@ -1,7 +1,11 @@
 mod android;
+mod gettext;
 
 use regex::Regex;
-use std::{collections::HashMap, fs::File};
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+};
 
 fn main() {
     let strings_file = File::open("../src/main/res/values/strings.xml")
@@ -21,5 +25,14 @@ fn main() {
         })
         .collect();
 
-    dbg!(known_strings);
+    let locale_files = fs::read_dir("../../gui/locales")
+        .expect("Failed to open root locale directory")
+        .filter_map(|dir_entry_result| dir_entry_result.ok().map(|dir_entry| dir_entry.path()))
+        .filter(|dir_entry_path| dir_entry_path.is_dir())
+        .map(|dir_path| dir_path.join("messages.po"))
+        .filter(|file_path| file_path.exists());
+
+    for locale_file in locale_files {
+        dbg!(gettext::load_file(locale_file));
+    }
 }
