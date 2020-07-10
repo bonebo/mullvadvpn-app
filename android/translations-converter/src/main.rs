@@ -33,6 +33,24 @@ fn main() {
         .filter(|file_path| file_path.exists());
 
     for locale_file in locale_files {
-        dbg!(gettext::load_file(locale_file));
+        generate_translations(&known_strings, gettext::load_file(&locale_file));
     }
+}
+
+fn generate_translations(
+    known_strings: &HashMap<String, String>,
+    translations: Vec<gettext::MsgEntry>,
+) {
+    let mut localized_resource = android::StringResources::new();
+
+    for translation in translations {
+        if let Some(android_key) = known_strings.get(&translation.id) {
+            localized_resource.push(android::StringResource {
+                name: android_key.clone(),
+                value: translation.value,
+            });
+        }
+    }
+
+    dbg!(localized_resource);
 }
