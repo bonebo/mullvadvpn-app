@@ -48,6 +48,17 @@ impl IntoIterator for StringResources {
     }
 }
 
+impl StringResource {
+    pub fn new(name: String, value: &str) -> Self {
+        let value = value
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+            .replace("\'", "\\\'");
+
+        StringResource { name, value }
+    }
+}
+
 impl Display for StringResources {
     fn fmt(&self, formatter: &mut Formatter) -> fmt::Result {
         writeln!(formatter, "<resources>")?;
