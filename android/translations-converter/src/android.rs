@@ -1,8 +1,15 @@
+use lazy_static::lazy_static;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Display, Formatter},
     ops::{Deref, DerefMut},
 };
+
+lazy_static! {
+    static ref LINE_BREAKS: Regex = Regex::new(r"\s*\n\s*").unwrap();
+    static ref APOSTROPHES: Regex = Regex::new(r"\\'").unwrap();
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StringResources {
@@ -21,6 +28,12 @@ impl StringResources {
     pub fn new() -> Self {
         StringResources {
             entries: Vec::new(),
+        }
+    }
+
+    pub fn normalize(&mut self) {
+        for entry in &mut self.entries {
+            entry.normalize();
         }
     }
 }
@@ -56,6 +69,13 @@ impl StringResource {
             .replace("\'", "\\\'");
 
         StringResource { name, value }
+    }
+
+    pub fn normalize(&mut self) {
+        let value = LINE_BREAKS.replace_all(&self.value, " ");
+        let value = APOSTROPHES.replace_all(&value, "'");
+
+        self.value = value.into_owned();
     }
 }
 

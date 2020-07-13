@@ -1,7 +1,6 @@
 mod android;
 mod gettext;
 
-use regex::Regex;
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -12,21 +11,17 @@ fn main() {
     let resources_dir = Path::new("../src/main/res");
     let strings_file = File::open(resources_dir.join("values/strings.xml"))
         .expect("Failed to open string resources file");
-    let string_resources: android::StringResources =
+    let mut string_resources: android::StringResources =
         serde_xml_rs::from_reader(strings_file).expect("Failed to read string resources file");
 
-    let line_breaks = Regex::new(r"\s*\n\s*").unwrap();
-    let apostrophes = Regex::new(r"\\'").unwrap();
+    string_resources.normalize();
 
     let known_strings: HashMap<_, _> = string_resources
         .into_iter()
         .map(|string| {
             let android_id = string.name;
-            let without_line_breaks = line_breaks.replace_all(&string.value, " ");
-            let without_escaped_apostrophes = apostrophes.replace_all(&without_line_breaks, "'");
-            let string_value = without_escaped_apostrophes.into_owned();
 
-            (string_value, android_id)
+            (string.value, android_id)
         })
         .collect();
 
