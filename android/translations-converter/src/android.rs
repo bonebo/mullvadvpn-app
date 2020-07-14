@@ -9,6 +9,7 @@ use std::{
 lazy_static! {
     static ref LINE_BREAKS: Regex = Regex::new(r"\s*\n\s*").unwrap();
     static ref APOSTROPHES: Regex = Regex::new(r"\\'").unwrap();
+    static ref PARAMETERS: Regex = Regex::new(r"%[0-9]*\$").unwrap();
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -63,10 +64,18 @@ impl IntoIterator for StringResources {
 
 impl StringResource {
     pub fn new(name: String, value: &str) -> Self {
-        let value = value
+        let value_with_parameters = value
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
             .replace("\'", "\\\'");
+
+        let mut parts = value_with_parameters.split("%");
+        let mut value = parts.next().unwrap().to_owned();
+
+        for (index, part) in parts.enumerate() {
+            value.push_str(&format!("%{}$", index + 1));
+            value.push_str(part);
+        }
 
         StringResource { name, value }
     }
@@ -74,6 +83,7 @@ impl StringResource {
     pub fn normalize(&mut self) {
         let value = LINE_BREAKS.replace_all(&self.value, " ");
         let value = APOSTROPHES.replace_all(&value, "'");
+        let value = PARAMETERS.replace_all(&value, "%");
 
         self.value = value.into_owned();
     }
