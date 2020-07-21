@@ -16,14 +16,14 @@ fn main() {
 
     string_resources.normalize();
 
-    let known_strings: HashMap<_, _> = string_resources
+    let (known_urls, known_strings): (HashMap<_, _>, _) = string_resources
         .into_iter()
         .map(|string| {
             let android_id = string.name;
 
             (string.value, android_id)
         })
-        .collect();
+        .partition(|(string_value, _)| string_value.starts_with("https://mullvad.net/en/"));
 
     let locale_files = fs::read_dir("../../gui/locales")
         .expect("Failed to open root locale directory")
@@ -47,6 +47,8 @@ fn main() {
         }
 
         generate_translations(
+            locale,
+            known_urls.clone(),
             known_strings.clone(),
             gettext::load_file(&locale_file),
             destination_dir.join("strings.xml"),
@@ -69,6 +71,8 @@ fn android_locale_directory(locale: &str) -> String {
 }
 
 fn generate_translations(
+    locale: &str,
+    known_urls: HashMap<String, String>,
     mut known_strings: HashMap<String, String>,
     translations: Vec<gettext::MsgEntry>,
     output_path: impl AsRef<Path>,
@@ -84,6 +88,17 @@ fn generate_translations(
         }
     }
 
+    if let Some(web_locale) = website_locale(locale) {
+        let locale_path = format!("/{}/", web_locale);
+
+        for (url, android_key) in known_urls {
+            localized_resource.push(android::StringResource::new(
+                android_key,
+                &url.replacen("/en/", &locale_path, 1),
+            ));
+        }
+    }
+
     fs::write(output_path, localized_resource.to_string())
         .expect("Failed to create Android locale file");
 
@@ -91,5 +106,16 @@ fn generate_translations(
 
     for (missing_translation, id) in known_strings {
         println!("  {}: {}", id, missing_translation);
+    }
+}
+
+fn website_locale(locale: &str) -> Option<&str> {
+    match locale {
+        locale if !locale.contains("-") => Some(locale),
+        "zh-TW" => Some("zh-hant"),
+        unknown_locale => {
+            eprintln!("Unknown locale: {}", unknown_locale);
+            None
+        }
     }
 }
