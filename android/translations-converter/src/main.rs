@@ -13,6 +13,7 @@ fn main() {
         .expect("Failed to open string resources file");
     let mut string_resources: android::StringResources =
         serde_xml_rs::from_reader(strings_file).expect("Failed to read string resources file");
+    let mut missing_translations = HashMap::new();
 
     string_resources.normalize();
 
@@ -52,7 +53,14 @@ fn main() {
             known_strings.clone(),
             gettext::load_file(&locale_file),
             destination_dir.join("strings.xml"),
+            &mut missing_translations,
         );
+    }
+
+    println!("Missing translations:");
+
+    for (missing_translation, id) in missing_translations {
+        println!("  {}: {}", id, missing_translation);
     }
 }
 
@@ -76,6 +84,7 @@ fn generate_translations(
     mut known_strings: HashMap<String, String>,
     translations: Vec<gettext::MsgEntry>,
     output_path: impl AsRef<Path>,
+    missing_translations: &mut HashMap<String, String>,
 ) {
     let mut localized_resource = android::StringResources::new();
 
@@ -102,11 +111,7 @@ fn generate_translations(
     fs::write(output_path, localized_resource.to_string())
         .expect("Failed to create Android locale file");
 
-    println!("Missing translations:");
-
-    for (missing_translation, id) in known_strings {
-        println!("  {}: {}", id, missing_translation);
-    }
+    missing_translations.extend(known_strings.into_iter());
 }
 
 fn website_locale(locale: &str) -> Option<&str> {
