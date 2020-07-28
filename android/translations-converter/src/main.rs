@@ -27,7 +27,8 @@ fn main() {
 
     let mut missing_translations = known_strings.clone();
 
-    let locale_files = fs::read_dir("../../gui/locales")
+    let locale_dir = Path::new("../../gui/locales");
+    let locale_files = fs::read_dir(&locale_dir)
         .expect("Failed to open root locale directory")
         .filter_map(|dir_entry_result| dir_entry_result.ok().map(|dir_entry| dir_entry.path()))
         .filter(|dir_entry_path| dir_entry_path.is_dir())
@@ -60,9 +61,20 @@ fn main() {
 
     println!("Missing translations:");
 
-    for (missing_translation, id) in missing_translations {
+    for (missing_translation, id) in &missing_translations {
         println!("  {}: {}", id, missing_translation);
     }
+
+    gettext::append_to_template(
+        locale_dir.join("messages.pot"),
+        missing_translations
+            .into_iter()
+            .map(|(id, _)| gettext::MsgEntry {
+                id,
+                value: String::new(),
+            }),
+    )
+    .expect("Failed to append missing translations to message template file");
 }
 
 fn android_locale_directory(locale: &str) -> String {
