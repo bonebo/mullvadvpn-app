@@ -6,6 +6,13 @@ import path from 'path';
 import ISplitTunnelingApplication from '../shared/linux-split-tunneling-application';
 import { pascalCaseToCamelCase } from './transform-object-keys';
 
+const APPLICATIONS_LAUNCHING_IN_EXISTING_PROCESS = [
+  'firefox',
+  'firefox-esr',
+  'chrome',
+  'gnome-terminal',
+];
+
 type DirectoryDescription = string | RegExp;
 
 interface IApplication extends ISplitTunnelingApplication {
@@ -37,6 +44,7 @@ export function getApplications(locale: string): Promise<ISplitTunnelingApplicat
       return pascalCaseToCamelCase<ISplitTunnelingApplication>(applications);
     })
     .filter(shouldShowApplication)
+    .map(addApplicationWarnings)
     .sort((a, b) => a.name.localeCompare(b.name))
     .map(async (app) => ({ ...app, icon: await replaceWithIconPath(app.icon) }));
 
@@ -72,6 +80,18 @@ function shouldShowApplication(application: IApplication): boolean {
     !notShowInMatch &&
     (!application.onlyShowIn || onlyShowInMatch)
   );
+}
+
+function addApplicationWarnings(application: IApplication): IApplication {
+  const binaryBasename = path.basename(application.exec!.split(' ')[0]);
+  if (APPLICATIONS_LAUNCHING_IN_EXISTING_PROCESS.includes(binaryBasename)) {
+    return {
+      ...application,
+      warning: 'launches-in-existing-process',
+    };
+  } else {
+    return application;
+  }
 }
 
 function localizeNameAndIcon(application: AppData, locale: string) {

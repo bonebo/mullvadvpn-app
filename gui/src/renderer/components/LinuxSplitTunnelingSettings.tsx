@@ -1,6 +1,7 @@
 import { remote } from 'electron';
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useHistory } from 'react-router';
+import { sprintf } from 'sprintf-js';
 import styled from 'styled-components';
 import { colors } from '../../config.json';
 import { messages } from '../../shared/gettext';
@@ -11,6 +12,7 @@ import * as AppButton from './AppButton';
 import * as Cell from './Cell';
 import ImageView from './ImageView';
 import { Container, Layout } from './Layout';
+import { ModalContainer, ModalAlert, ModalAlertType } from './Modal';
 import {
   BackBarItem,
   NavigationBar,
@@ -114,66 +116,68 @@ export default function LinuxSplitTunnelingSettings() {
   return (
     <>
       <StyledPageCover show={browsing} />
-      <Layout>
-        <StyledContainer>
-          <NavigationContainer>
-            <NavigationBar>
-              <NavigationItems>
-                <BackBarItem action={history.goBack}>
-                  {
-                    // TRANSLATORS: Back button in navigation bar
-                    messages.pgettext('navigation-bar', 'Advanced')
-                  }
-                </BackBarItem>
-                <TitleBarItem>
-                  {
-                    // TRANSLATORS: Title label in navigation bar
-                    messages.pgettext('split-tunneling-nav', 'Split tunneling')
-                  }
-                </TitleBarItem>
-              </NavigationItems>
-            </NavigationBar>
+      <ModalContainer>
+        <Layout>
+          <StyledContainer>
+            <NavigationContainer>
+              <NavigationBar>
+                <NavigationItems>
+                  <BackBarItem action={history.goBack}>
+                    {
+                      // TRANSLATORS: Back button in navigation bar
+                      messages.pgettext('navigation-bar', 'Advanced')
+                    }
+                  </BackBarItem>
+                  <TitleBarItem>
+                    {
+                      // TRANSLATORS: Title label in navigation bar
+                      messages.pgettext('split-tunneling-nav', 'Split tunneling')
+                    }
+                  </TitleBarItem>
+                </NavigationItems>
+              </NavigationBar>
 
-            <StyledNavigationScrollbars>
-              <StyledContent>
-                <SettingsHeader>
-                  <HeaderTitle>
-                    {messages.pgettext('split-tunneling-view', 'Split tunneling')}
-                  </HeaderTitle>
-                  <HeaderSubTitle>
-                    {messages.pgettext(
-                      'split-tunneling-view',
-                      'Click on an app to launch it. Its traffic will bypass the VPN tunnel until you close it.',
-                    )}
-                  </HeaderSubTitle>
-                </SettingsHeader>
+              <StyledNavigationScrollbars>
+                <StyledContent>
+                  <SettingsHeader>
+                    <HeaderTitle>
+                      {messages.pgettext('split-tunneling-view', 'Split tunneling')}
+                    </HeaderTitle>
+                    <HeaderSubTitle>
+                      {messages.pgettext(
+                        'split-tunneling-view',
+                        'Click on an app to launch it. Its traffic will bypass the VPN tunnel until you close it.',
+                      )}
+                    </HeaderSubTitle>
+                  </SettingsHeader>
 
-                <StyledApplicationListAnimation height={applicationListHeight}>
-                  <StyledApplicationListContent ref={applicationListRef}>
-                    {applications === undefined ? (
-                      <StyledSpinnerRow>
-                        <ImageView source="icon-spinner" height={60} width={60} />
-                      </StyledSpinnerRow>
-                    ) : (
-                      applications.map((application) => (
-                        <ApplicationRow
-                          key={application.absolutepath}
-                          application={application}
-                          launchApplication={launchExcludedApplication}
-                        />
-                      ))
-                    )}
-                  </StyledApplicationListContent>
-                </StyledApplicationListAnimation>
+                  <StyledApplicationListAnimation height={applicationListHeight}>
+                    <StyledApplicationListContent ref={applicationListRef}>
+                      {applications === undefined ? (
+                        <StyledSpinnerRow>
+                          <ImageView source="icon-spinner" height={60} width={60} />
+                        </StyledSpinnerRow>
+                      ) : (
+                        applications.map((application) => (
+                          <ApplicationRow
+                            key={application.absolutepath}
+                            application={application}
+                            launchApplication={launchExcludedApplication}
+                          />
+                        ))
+                      )}
+                    </StyledApplicationListContent>
+                  </StyledApplicationListAnimation>
 
-                <StyledBrowseButton onClick={launchWithFilePicker}>
-                  {messages.pgettext('split-tunneling-view', 'Browse')}
-                </StyledBrowseButton>
-              </StyledContent>
-            </StyledNavigationScrollbars>
-          </NavigationContainer>
-        </StyledContainer>
-      </Layout>
+                  <StyledBrowseButton onClick={launchWithFilePicker}>
+                    {messages.pgettext('split-tunneling-view', 'Browse')}
+                  </StyledBrowseButton>
+                </StyledContent>
+              </StyledNavigationScrollbars>
+            </NavigationContainer>
+          </StyledContainer>
+        </Layout>
+      </ModalContainer>
     </>
   );
 }
@@ -184,18 +188,49 @@ interface IApplicationRowProps {
 }
 
 function ApplicationRow(props: IApplicationRowProps) {
-  const onClick = useCallback(() => {
+  const [showWarning, setShowWarning] = useState(false);
+
+  const launch = useCallback(() => {
+    setShowWarning(false);
     props.launchApplication(props.application);
   }, [props.launchApplication, props.application]);
 
+  const showWarningDialog = useCallback(() => setShowWarning(true), []);
+  const hideWarningDialog = useCallback(() => setShowWarning(false), []);
+
   return (
-    <Cell.CellButton onClick={onClick}>
-      {props.application.icon ? (
-        <StyledIcon source={props.application.icon} width={35} height={35} />
-      ) : (
-        <StyledIconPlaceholder />
+    <>
+      <Cell.CellButton onClick={props.application.warning ? showWarningDialog : launch}>
+        {props.application.icon ? (
+          <StyledIcon source={props.application.icon} width={35} height={35} />
+        ) : (
+          <StyledIconPlaceholder />
+        )}
+        <Cell.Label>{props.application.name}</Cell.Label>
+        {props.application.warning === 'launches-in-existing-process' && (
+          <Cell.Icon source="icon-alert" tintColor={colors.yellow} />
+        )}
+      </Cell.CellButton>
+      {showWarning && (
+        <ModalAlert
+          type={ModalAlertType.Warning}
+          message={sprintf(
+            messages.pgettext(
+              'split-tunneling-view',
+              "%(applicationName)s isn't launched as a new instance if there are running instances. To be able to run %(applicationName)s outside the VPN tunnel you first need to close all existing instances, if any.",
+            ),
+            { applicationName: props.application.name },
+          )}
+          buttons={[
+            <AppButton.RedButton key="launch" onClick={launch}>
+              {messages.pgettext('split-tunneling-view', 'Launch')}
+            </AppButton.RedButton>,
+            <AppButton.BlueButton key="cancel" onClick={hideWarningDialog}>
+              {messages.gettext('Cancel')}
+            </AppButton.BlueButton>,
+          ]}
+        />
       )}
-      <Cell.Label>{props.application.name}</Cell.Label>
-    </Cell.CellButton>
+    </>
   );
 }
