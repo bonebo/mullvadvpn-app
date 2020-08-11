@@ -11,11 +11,8 @@ use std::{
 };
 use talpid_types::ErrorExt;
 
-#[cfg(windows)]
-use talpid_core::logging::windows::log_sink;
 
-
-static SETTINGS_FILE: &str = "settings.json";
+const SETTINGS_FILE: &str = "settings.json";
 
 
 #[derive(err_derive::Error, Debug)]
@@ -44,7 +41,7 @@ enum LoadSettingsError {
 
     #[cfg(windows)]
     #[error(display = "Failed to restore Windows Update backup: {}", _0)]
-    WinMigrationError(ffi::WinUtilMigrationStatus),
+    WinMigrationError(#[error(source)] windows::Error),
 }
 
 
@@ -123,16 +120,8 @@ impl SettingsPersister {
     ) -> Result<(Settings, bool), LoadSettingsError> {
         info!("No settings file found. Attempting migration from Windows Update backup location");
 
-        Self::migrate_after_windows_update()?;
+        windows::migrate_after_windows_update().map_err(LoadSettingsError::WinMigrationError)?;
         Self::load_settings_from_file(path)
-    }
-
-    #[cfg(windows)]
-    fn migrate_after_windows_update() -> Result<(), LoadSettingsError> {
-        unsafe {
-            ffi::WinUtil_MigrateAfterWindowsUpdate(Some(log_sink), b"Settings migrator\0".as_ptr())
-                .into()
-        }
     }
 
     /// Serializes the settings and saves them to the file it was loaded from.
@@ -274,51 +263,163 @@ impl Deref for SettingsPersister {
 
 
 #[cfg(windows)]
-mod ffi {
-    use std::fmt;
-    use talpid_core::logging::windows::LogSink;
+mod windows {
+    use std::{fs, io, path::Path, ptr};
 
-    #[derive(Debug)]
-    #[allow(dead_code)]
-    #[repr(u32)]
-    pub enum WinUtilMigrationStatus {
-        Success = 0,
-        Aborted = 1,
-        NothingToMigrate = 2,
-        Failed = 3,
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+
+    use winapi::{
+        shared::{minwindef::TRUE, winerror::ERROR_SUCCESS},
+        um::{
+            accctrl::{SE_FILE_OBJECT, SE_OBJECT_TYPE},
+            aclapi::GetNamedSecurityInfoW,
+            securitybaseapi::IsWellKnownSid,
+            winbase::LocalFree,
+            winnt::{
+                WinBuiltinAdministratorsSid, WinLocalSystemSid, OWNER_SECURITY_INFORMATION, PSID,
+                SECURITY_DESCRIPTOR, SECURITY_INFORMATION, SID, WELL_KNOWN_SID_TYPE,
+            },
+        },
+    };
+
+    const MIGRATION_DIR_NAME: &str = "windows.old";
+    const MIGRATE_FILES: [(&str, bool); 2] =
+        [("settings.json", true), ("account-history.json", false)];
+
+    #[derive(err_derive::Error, Debug)]
+    #[error(no_from)]
+    pub enum Error {
+        #[error(display = "Could not migrate settings - no backup present")]
+        NothingToMigrate,
+        #[error(display = "Unable to find settings directory")]
+        FindSettings(#[error(source)] mullvad_paths::Error),
+        #[error(display = "Migration was aborted to avoid overwriting current settings")]
+        SettingsExist,
+        #[error(display = "Could not acquire security descriptor of backup directory")]
+        SecurityInformation(#[error(source)] io::Error),
+        #[error(display = "Backup directory is not owned by SYSTEM or Built-in Administrators")]
+        WrongOwner,
+        #[error(display = "Failed to copy files during migration")]
+        IoError(#[error(source)] io::Error),
     }
 
-    impl fmt::Display for WinUtilMigrationStatus {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            use WinUtilMigrationStatus::*;
-            write!(
-                f,
-                "{}",
-                match self {
-                    Success => "Migration completed successfully",
-                    Aborted => "Migration was aborted to avoid overwriting current settings",
-                    NothingToMigrate => "Could not migrate settings - no backup present",
-                    Failed => "Migration failed",
-                }
-            )
+    pub fn migrate_after_windows_update() -> Result<(), Error> {
+        let mullvad_app_data = mullvad_paths::settings_dir().map_err(Error::FindSettings)?;
+
+        let settings_path = mullvad_app_data.join(super::SETTINGS_FILE);
+        if settings_path.exists() {
+            return Err(Error::SettingsExist);
         }
-    }
 
-    impl Into<Result<(), super::LoadSettingsError>> for WinUtilMigrationStatus {
-        fn into(self) -> Result<(), super::LoadSettingsError> {
-            match self {
-                WinUtilMigrationStatus::Success => Ok(()),
-                val => Err(super::LoadSettingsError::WinMigrationError(val)),
+        let mut comps = mullvad_app_data.components();
+        let prefix = comps.next().unwrap();
+        let root = comps.next().unwrap();
+
+        let backup_path = Path::new(&prefix)
+            .join(&root)
+            .join(MIGRATION_DIR_NAME)
+            .join(&comps);
+        if !backup_path.exists() {
+            return Err(Error::NothingToMigrate);
+        }
+
+        let security_info =
+            SecurityInformation::from_file(&backup_path.as_path(), OWNER_SECURITY_INFORMATION)
+                .map_err(Error::SecurityInformation)?;
+
+        let owner_sid = security_info.owner().unwrap();
+
+        if !is_well_known_sid(owner_sid, WinLocalSystemSid)
+            && !is_well_known_sid(owner_sid, WinBuiltinAdministratorsSid)
+        {
+            return Err(Error::WrongOwner);
+        }
+
+        if !mullvad_app_data.exists() {
+            fs::create_dir_all(&mullvad_app_data).map_err(Error::IoError)?;
+        }
+
+        let mut last_error = Ok(());
+
+        for (file, required) in &MIGRATE_FILES {
+            let from = backup_path.join(file);
+            let to = mullvad_app_data.join(file);
+
+            match fs::copy(&from, &to) {
+                Ok(_) => {
+                    let _ = fs::remove_file(from);
+                }
+                Err(error) if *required => {
+                    last_error = Err(error);
+                }
+                Err(_) => (),
             }
         }
+
+        last_error.map_err(Error::IoError)
     }
 
-    #[allow(non_snake_case)]
-    extern "system" {
-        #[link_name = "WinUtil_MigrateAfterWindowsUpdate"]
-        pub fn WinUtil_MigrateAfterWindowsUpdate(
-            sink: Option<LogSink>,
-            sink_context: *const u8,
-        ) -> WinUtilMigrationStatus;
+    struct SecurityInformation {
+        security_descriptor: *mut SECURITY_DESCRIPTOR,
+        owner: PSID,
+    }
+
+    impl SecurityInformation {
+        pub fn from_file<T: AsRef<OsStr>>(
+            path: T,
+            security_information: SECURITY_INFORMATION,
+        ) -> Result<Self, io::Error> {
+            Self::from_object(path, SE_FILE_OBJECT, security_information)
+        }
+
+        pub fn from_object<T: AsRef<OsStr>>(
+            object_name: T,
+            object_type: SE_OBJECT_TYPE,
+            security_information: SECURITY_INFORMATION,
+        ) -> Result<Self, io::Error> {
+            let mut u16_path: Vec<u16> = object_name.as_ref().encode_wide().collect();
+            u16_path.push(0u16);
+
+            let mut security_descriptor = std::ptr::null_mut();
+            let mut owner = std::ptr::null_mut();
+
+            let status = unsafe {
+                GetNamedSecurityInfoW(
+                    u16_path.as_ptr(),
+                    object_type,
+                    security_information,
+                    &mut owner,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    &mut security_descriptor,
+                )
+            };
+
+            if status != ERROR_SUCCESS {
+                return Err(std::io::Error::from_raw_os_error(status as i32));
+            }
+
+            Ok(SecurityInformation {
+                security_descriptor: security_descriptor as *mut _,
+                owner,
+            })
+        }
+
+        pub fn owner(&self) -> Option<&SID> {
+            unsafe { (self.owner as *const SID).as_ref() }
+        }
+
+        // TODO: Can be expanded with `group()`, `dacl()`, and `sacl()`.
+    }
+
+    impl Drop for SecurityInformation {
+        fn drop(&mut self) {
+            unsafe { LocalFree(self.security_descriptor as *mut _) };
+        }
+    }
+
+    fn is_well_known_sid(sid: &SID, well_known_sid_type: WELL_KNOWN_SID_TYPE) -> bool {
+        unsafe { IsWellKnownSid(sid as *const SID as *mut _, well_known_sid_type) == TRUE }
     }
 }
